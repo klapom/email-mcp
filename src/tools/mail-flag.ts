@@ -91,4 +91,25 @@ export function registerMailFlagTools(server: McpServer, config: Config) {
       };
     },
   );
+
+  server.tool(
+    "move_emails_bulk",
+    "Move multiple emails in a single IMAP operation. Much faster than calling move_email repeatedly. All UIDs must be in the same source folder.",
+    {
+      account: z.string().default(defaultName).describe(description),
+      uids: z.array(z.number().int()).describe("List of email UIDs to move"),
+      from_folder: z.string().describe("Source IMAP folder path"),
+      to_folder: z.string().describe("Destination IMAP folder path"),
+    },
+    async ({ account: accountName, uids, from_folder, to_folder }) => {
+      const account = getAccount(config, accountName);
+      await withImap(account, async (client) => {
+        await client.mailboxOpen(from_folder, { readOnly: false });
+        await client.messageMove(uids, to_folder, { uid: true });
+      });
+      return {
+        content: [{ type: "text", text: `${uids.length} emails moved from ${from_folder} to ${to_folder}.` }],
+      };
+    },
+  );
 }
