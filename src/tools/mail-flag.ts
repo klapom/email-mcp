@@ -82,12 +82,24 @@ export function registerMailFlagTools(server: McpServer, config: Config) {
     },
     async ({ account: accountName, uid, from_folder, to_folder }) => {
       const account = getAccount(config, accountName);
+      let folderCreated = false;
       await withImap(account, async (client) => {
+        // Auto-create destination folder if it doesn't exist
+        try {
+          await client.status(to_folder, { messages: true });
+        } catch {
+          await client.mailboxCreate(to_folder);
+          folderCreated = true;
+        }
         await client.mailboxOpen(from_folder, { readOnly: false });
-        await client.messageMove([uid], to_folder, { uid: true });
+        const result = await client.messageMove([uid], to_folder, { uid: true });
+        if (!result || (typeof result === 'object' && result.uidMap && result.uidMap.size === 0)) {
+          throw new Error(`IMAP MOVE failed for UID ${uid} — message may not exist in ${from_folder}`);
+        }
       });
+      const suffix = folderCreated ? ` (folder created)` : '';
       return {
-        content: [{ type: "text", text: `Email UID ${uid} moved from ${from_folder} to ${to_folder}.` }],
+        content: [{ type: "text", text: `Email UID ${uid} moved from ${from_folder} to ${to_folder}.${suffix}` }],
       };
     },
   );
@@ -103,12 +115,24 @@ export function registerMailFlagTools(server: McpServer, config: Config) {
     },
     async ({ account: accountName, uids, from_folder, to_folder }) => {
       const account = getAccount(config, accountName);
+      let folderCreated = false;
       await withImap(account, async (client) => {
+        // Auto-create destination folder if it doesn't exist
+        try {
+          await client.status(to_folder, { messages: true });
+        } catch {
+          await client.mailboxCreate(to_folder);
+          folderCreated = true;
+        }
         await client.mailboxOpen(from_folder, { readOnly: false });
-        await client.messageMove(uids, to_folder, { uid: true });
+        const result = await client.messageMove(uids, to_folder, { uid: true });
+        if (!result || (typeof result === 'object' && result.uidMap && result.uidMap.size === 0)) {
+          throw new Error(`IMAP MOVE failed — messages may not exist in ${from_folder}`);
+        }
       });
+      const suffix = folderCreated ? ` (folder created)` : '';
       return {
-        content: [{ type: "text", text: `${uids.length} emails moved from ${from_folder} to ${to_folder}.` }],
+        content: [{ type: "text", text: `${uids.length} emails moved from ${from_folder} to ${to_folder}.${suffix}` }],
       };
     },
   );

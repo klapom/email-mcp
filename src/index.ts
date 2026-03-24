@@ -1,6 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { loadConfig } from "./config.js";
+import { registerMailAttachmentTools } from "./tools/mail-attachment.js";
 import { registerMailFlagTools } from "./tools/mail-flag.js";
 import { registerMailFolderTools } from "./tools/mail-folders.js";
 import { registerMailListTools } from "./tools/mail-list.js";
@@ -25,6 +26,7 @@ async function main() {
     process.exit(1);
   }
 
+  registerMailAttachmentTools(server, config);
   registerMailFolderTools(server, config);
   registerMailListTools(server, config);
   registerMailReadTools(server, config);
