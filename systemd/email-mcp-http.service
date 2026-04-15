@@ -1,22 +1,27 @@
 [Unit]
-Description=Email MCP HTTP Wrapper (IMAP/SMTP via Nodemailer)
+Description=email-mcp HTTP wrapper (REST 32200 + MCP Streamable-HTTP 33200)
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-User=admin
-Group=admin
 WorkingDirectory=/home/admin/projects/email-mcp
 EnvironmentFile=/home/admin/projects/email-mcp/.env
-Environment=HTTP_PORT=8201
-Environment=HTTP_HOST=0.0.0.0
 Environment=NODE_ENV=production
+Environment=LISTEN_PORT=32200
+Environment=MCP_PORT=33200
+Environment=LISTEN_HOST=0.0.0.0
 ExecStart=/usr/bin/node /home/admin/projects/email-mcp/dist/http_server.js
 Restart=on-failure
 RestartSec=5
 StandardOutput=journal
 StandardError=journal
+SyslogIdentifier=email-mcp-http
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ReadWritePaths=/home/admin/projects/email-mcp
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=default.target
