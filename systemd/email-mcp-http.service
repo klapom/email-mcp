@@ -1,0 +1,22 @@
+[Unit]
+Description=Email MCP HTTP Wrapper (IMAP/SMTP via Nodemailer)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=admin
+Group=admin
+WorkingDirectory=/home/admin/projects/email-mcp
+EnvironmentFile=/home/admin/projects/email-mcp/.env
+Environment=HTTP_PORT=8201
+Environment=HTTP_HOST=0.0.0.0
+Environment=NODE_ENV=production
+ExecStart=/usr/bin/node /home/admin/projects/email-mcp/dist/http_server.js
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
