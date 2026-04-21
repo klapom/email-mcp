@@ -1,27 +1,26 @@
 [Unit]
-Description=email-mcp HTTP wrapper (REST 32200 + MCP Streamable-HTTP 33200)
+Description=email-mcp - REST 32200 + MCP Streamable-HTTP 33200
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
 WorkingDirectory=/home/admin/projects/email-mcp
-EnvironmentFile=/home/admin/projects/email-mcp/.env
 Environment=NODE_ENV=production
 Environment=LISTEN_PORT=32200
 Environment=MCP_PORT=33200
 Environment=LISTEN_HOST=0.0.0.0
-ExecStart=/usr/bin/node /home/admin/projects/email-mcp/dist/http_server.js
+ExecStart=/usr/bin/node --env-file=.env /home/admin/projects/email-mcp/dist/http_server.js
 Restart=on-failure
 RestartSec=5
 StandardOutput=journal
 StandardError=journal
-SyslogIdentifier=email-mcp-http
+SyslogIdentifier=email-mcp
 
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=full
-ReadWritePaths=/home/admin/projects/email-mcp
+ReadWritePaths=/home/admin/projects/email-mcp /home/admin/.email-mcp
 
 [Install]
 WantedBy=default.target

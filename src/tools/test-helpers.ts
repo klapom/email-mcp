@@ -1,5 +1,6 @@
-import { vi } from "vitest";
+import pino from "pino";
 import type { Config } from "../config.js";
+import type { ToolsContext } from "./context.js";
 
 export const testConfig: Config = {
   accounts: {
@@ -14,15 +15,10 @@ export const testConfig: Config = {
   defaultAccount: "main",
 };
 
-export function createMockServer() {
-  const tools: Record<string, { handler: (args: Record<string, unknown>) => Promise<unknown> }> = {};
+export function buildTestContext(overrides: Partial<ToolsContext> = {}): ToolsContext {
   return {
-    tool: vi.fn((name: string, _desc: string, _schema: unknown, handler: (args: Record<string, unknown>) => Promise<unknown>) => {
-      tools[name] = { handler };
-    }),
-    _tools: tools,
-    callTool: async (name: string, args: Record<string, unknown>) => {
-      return tools[name].handler(args);
-    },
+    logger: pino({ level: "silent" }),
+    config: testConfig,
+    ...overrides,
   };
 }

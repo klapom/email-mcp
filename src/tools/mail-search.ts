@@ -1,15 +1,28 @@
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { ToolDef } from "@klapom/mcp-toolkit-ts";
 import { z } from "zod";
-import { type Config, accountParam, getAccount } from "../config.js";
-import { withImap } from "../imap-client.js";
+import { accountParam, getAccount } from "../config.js";
+import { withImap } from "../upstream/imap-client.js";
+import type { ToolsContext } from "./context.js";
 
-export function registerMailSearchTools(server: McpServer, config: Config) {
-  const { description, defaultName } = accountParam(config);
+export function buildMailSearchTools(
+  ctx: ToolsContext,
+): // biome-ignore lint/suspicious/noExplicitAny: heterogeneous Zod shapes per tool
+Array<ToolDef<any, ToolsContext>> {
+  const { description, defaultName } = accountParam(ctx.config);
 
-  server.tool(
-    "search_emails",
-    "Search emails by sender, subject, or body text.",
+  const search_emails: ToolDef<
     {
+      account: z.ZodDefault<z.ZodString>;
+      query: z.ZodString;
+      search_in: z.ZodDefault<z.ZodEnum<["subject", "from", "body", "all"]>>;
+      folder: z.ZodDefault<z.ZodString>;
+      limit: z.ZodDefault<z.ZodNumber>;
+    },
+    ToolsContext
+  > = {
+    name: "search_emails",
+    description: "Search emails by sender, subject, or body text.",
+    shape: {
       account: z.string().default(defaultName).describe(description),
       query: z.string().describe("Search text"),
       search_in: z
@@ -17,16 +30,10 @@ export function registerMailSearchTools(server: McpServer, config: Config) {
         .default("all")
         .describe("Where to search: subject, from, body, or all"),
       folder: z.string().default("INBOX").describe("IMAP folder to search in"),
-      limit: z
-        .number()
-        .int()
-        .min(1)
-        .max(50)
-        .default(10)
-        .describe("Max results"),
+      limit: z.number().int().min(1).max(50).default(10).describe("Max results"),
     },
-    async ({ account: accountName, query, search_in, folder, limit }) => {
-      const account = getAccount(config, accountName);
+    handler: async (ctx, { account: accountName, query, search_in, folder, limit }) => {
+      const account = getAccount(ctx.config, accountName);
       const emails = await withImap(account, async (client) => {
         await client.mailboxOpen(folder, { readOnly: true });
 
@@ -43,11 +50,7 @@ export function registerMailSearchTools(server: McpServer, config: Config) {
             break;
           default:
             criteria = {
-              or: [
-                { header: ["subject", query] },
-                { header: ["from", query] },
-                { body: query },
-              ],
+              or: [{ header: ["subject", query] }, { header: ["from", query] }, { body: query }],
             };
         }
 
@@ -56,13 +59,13 @@ export function registerMailSearchTools(server: McpServer, config: Config) {
 
         const selectedUids = (uids as number[]).slice(-limit).reverse();
 
-        const result: {
+        const result: Array<{
           uid: number;
           from: string;
           subject: string;
           date: string;
           seen: boolean;
-        }[] = [];
+        }> = [];
 
         for await (const msg of client.fetch(
           selectedUids,
@@ -95,5 +98,7 @@ export function registerMailSearchTools(server: McpServer, config: Config) {
         ],
       };
     },
-  );
+  };
+
+  return [search_emails];
 }

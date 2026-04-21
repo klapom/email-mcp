@@ -1,31 +1,37 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import { createMockServer, testConfig } from "./test-helpers.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { buildTestContext } from "./test-helpers.js";
 
 const mockWithImap = vi.fn();
-vi.mock("../imap-client.js", () => ({
+vi.mock("../upstream/imap-client.js", () => ({
   withImap: (...args: unknown[]) => mockWithImap(...args),
 }));
 
-import { registerMailFolderTools } from "./mail-folders.js";
+import { buildMailFolderTools } from "./mail-folders.js";
 
 describe("mail-folders", () => {
-  const server = createMockServer();
-
   beforeEach(() => {
     vi.clearAllMocks();
-    registerMailFolderTools(server as never, testConfig);
   });
 
-  it("registers list_folders tool", () => {
-    expect(server.tool).toHaveBeenCalledWith("list_folders", expect.any(String), expect.any(Object), expect.any(Function));
+  it("exposes list_folders tool", () => {
+    const tools = buildMailFolderTools(buildTestContext());
+    expect(tools.map((t) => t.name)).toEqual(["list_folders"]);
   });
 
   it("returns folder list", async () => {
-    mockWithImap.mockImplementation(async (_acc: unknown, fn: (client: unknown) => Promise<unknown>) =>
-      fn({ list: async () => [{ path: "INBOX", name: "Inbox" }, { path: "Sent", name: "Sent" }] }),
+    mockWithImap.mockImplementation(
+      async (_acc: unknown, fn: (client: unknown) => Promise<unknown>) =>
+        fn({
+          list: async () => [
+            { path: "INBOX", name: "Inbox" },
+            { path: "Sent", name: "Sent" },
+          ],
+        }),
     );
-    const result = await server.callTool("list_folders", { account: "main" }) as { content: { text: string }[] };
-    const parsed = JSON.parse(result.content[0].text);
+    const ctx = buildTestContext();
+    const [tool] = buildMailFolderTools(ctx);
+    const result = await tool!.handler(ctx, { account: "main" });
+    const parsed = JSON.parse(result.content[0]!.text);
     expect(parsed).toHaveLength(2);
     expect(parsed[0].path).toBe("INBOX");
   });

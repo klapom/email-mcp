@@ -1,5 +1,5 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import type { AccountConfig } from "./config.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { AccountConfig } from "../config.js";
 
 const mockSendMail = vi.fn();
 
@@ -34,10 +34,11 @@ describe("sendEmail", () => {
   });
 
   it("uses bare email when fromName is empty", async () => {
-    await sendEmail({ ...account, fromName: "" }, { to: "r@test.com", subject: "Hi", text: "body" });
-    expect(mockSendMail).toHaveBeenCalledWith(
-      expect.objectContaining({ from: "u@test.com" }),
+    await sendEmail(
+      { ...account, fromName: "" },
+      { to: "r@test.com", subject: "Hi", text: "body" },
     );
+    expect(mockSendMail).toHaveBeenCalledWith(expect.objectContaining({ from: "u@test.com" }));
   });
 
   it("returns messageId", async () => {

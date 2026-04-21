@@ -1,5 +1,5 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import type { AccountConfig } from "./config.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { AccountConfig } from "../config.js";
 
 const mockConnect = vi.fn();
 const mockLogout = vi.fn();
