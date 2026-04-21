@@ -1,5 +1,5 @@
 import { ImapFlow } from "imapflow";
-import type { AccountConfig } from "./config.js";
+import type { AccountConfig } from "../config.js";
 
 export function createImapClient(account: AccountConfig): ImapFlow {
   return new ImapFlow({

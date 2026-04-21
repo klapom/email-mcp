@@ -1,5 +1,5 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import { loadConfig, getAccount, accountParam } from "./config.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { accountParam, getAccount, loadConfig } from "./config.js";
 
 vi.mock("fs", () => ({
   readFileSync: vi.fn(),
@@ -9,7 +9,7 @@ vi.mock("os", () => ({
   homedir: () => "/fakehome",
 }));
 
-import { readFileSync } from "fs";
+import { readFileSync } from "node:fs";
 
 const validConfig = {
   accounts: {
@@ -33,7 +33,7 @@ const validConfig = {
 
 beforeEach(() => {
   vi.mocked(readFileSync).mockReset();
-  delete process.env.EMAIL_ACCOUNTS_FILE;
+  process.env.EMAIL_ACCOUNTS_FILE = undefined;
 });
 
 describe("loadConfig", () => {

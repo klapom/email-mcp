@@ -1,15 +1,40 @@
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { ToolDef } from "@klapom/mcp-toolkit-ts";
 import { z } from "zod";
-import { type Config, accountParam, getAccount } from "../config.js";
-import { withImap } from "../imap-client.js";
+import { accountParam, getAccount } from "../config.js";
+import { withImap } from "../upstream/imap-client.js";
+import type { ToolsContext } from "./context.js";
 
-export function registerMailListTools(server: McpServer, config: Config) {
-  const { description, defaultName } = accountParam(config);
+// biome-ignore lint/suspicious/noExplicitAny: imapflow bodyStructure is loosely typed
+function hasAttachment(structure: any): boolean {
+  if (!structure) return false;
+  if (
+    structure.disposition?.toLowerCase() === "attachment" ||
+    structure.type?.toLowerCase() === "attachment"
+  )
+    return true;
+  if (structure.childNodes) return structure.childNodes.some((c: unknown) => hasAttachment(c));
+  return false;
+}
 
-  server.tool(
-    "list_emails",
-    "List emails in a mailbox folder. Returns sender, subject, date, uid for each email.",
+export function buildMailListTools(
+  ctx: ToolsContext,
+): // biome-ignore lint/suspicious/noExplicitAny: heterogeneous Zod shapes per tool
+Array<ToolDef<any, ToolsContext>> {
+  const { description, defaultName } = accountParam(ctx.config);
+
+  const list_emails: ToolDef<
     {
+      account: z.ZodDefault<z.ZodString>;
+      folder: z.ZodDefault<z.ZodString>;
+      limit: z.ZodDefault<z.ZodNumber>;
+      unread_only: z.ZodDefault<z.ZodBoolean>;
+    },
+    ToolsContext
+  > = {
+    name: "list_emails",
+    description:
+      "List emails in a mailbox folder. Returns sender, subject, date, uid for each email.",
+    shape: {
       account: z.string().default(defaultName).describe(description),
       folder: z
         .string()
@@ -22,13 +47,10 @@ export function registerMailListTools(server: McpServer, config: Config) {
         .max(100)
         .default(20)
         .describe("Max number of emails to return (newest first)"),
-      unread_only: z
-        .boolean()
-        .default(false)
-        .describe("Only return unread emails"),
+      unread_only: z.boolean().default(false).describe("Only return unread emails"),
     },
-    async ({ account: accountName, folder, limit, unread_only }) => {
-      const account = getAccount(config, accountName);
+    handler: async (ctx, { account: accountName, folder, limit, unread_only }) => {
+      const account = getAccount(ctx.config, accountName);
       const emails = await withImap(account, async (client) => {
         const mailbox = await client.mailboxOpen(folder, { readOnly: true });
         if (mailbox.exists === 0) return [];
@@ -39,14 +61,14 @@ export function registerMailListTools(server: McpServer, config: Config) {
 
         const selectedUids = (uids as number[]).slice(-limit).reverse();
 
-        const result: {
+        const result: Array<{
           uid: number;
           from: string;
           subject: string;
           date: string;
           seen: boolean;
           hasAttachments: boolean;
-        }[] = [];
+        }> = [];
 
         for await (const msg of client.fetch(
           selectedUids,
@@ -72,18 +94,7 @@ export function registerMailListTools(server: McpServer, config: Config) {
         content: [{ type: "text", text: JSON.stringify(emails, null, 2) }],
       };
     },
-  );
-}
+  };
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function hasAttachment(structure: any): boolean {
-  if (!structure) return false;
-  if (
-    structure.disposition?.toLowerCase() === "attachment" ||
-    structure.type?.toLowerCase() === "attachment"
-  )
-    return true;
-  if (structure.childNodes)
-    return structure.childNodes.some((c: unknown) => hasAttachment(c));
-  return false;
+  return [list_emails];
 }

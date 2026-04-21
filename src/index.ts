@@ -1,60 +1,48 @@
+#!/usr/bin/env node
+/**
+ * stdio entry for email-mcp.
+ * Used by Claude Desktop. For REST + MCP Streamable-HTTP, see ./http_server.ts.
+ */
+import { createLogger } from "@klapom/mcp-toolkit-ts";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { loadConfig } from "./config.js";
-import { registerMailAttachmentTools } from "./tools/mail-attachment.js";
-import { registerMailFlagTools } from "./tools/mail-flag.js";
-import { registerMailFolderTools } from "./tools/mail-folders.js";
-import { registerMailListTools } from "./tools/mail-list.js";
-import { registerMailReadTools } from "./tools/mail-read.js";
-import { registerMailSearchTools } from "./tools/mail-search.js";
-import { registerMailSendTools } from "./tools/mail-send.js";
+import pkg from "../package.json" with { type: "json" };
+import { loadContext } from "./tools/context.js";
+import { registerTools } from "./tools/index.js";
 
-const VERSION = "0.2.0";
+const logger = createLogger(pkg.name);
 
-const server = new McpServer({
-  name: "email-mcp",
-  version: VERSION,
-});
-
-async function main() {
-  let config;
-  try {
-    config = loadConfig();
-  } catch (error) {
-    const msg = error instanceof Error ? error.message : String(error);
-    process.stderr.write(`[email-mcp] Config error: ${msg}\n`);
-    process.exit(1);
-  }
-
-  registerMailAttachmentTools(server, config);
-  registerMailFolderTools(server, config);
-  registerMailListTools(server, config);
-  registerMailReadTools(server, config);
-  registerMailSearchTools(server, config);
-  registerMailSendTools(server, config);
-  registerMailFlagTools(server, config);
+async function main(): Promise<void> {
+  const ctx = loadContext(logger);
+  const server = new McpServer({ name: pkg.name, version: pkg.version });
+  registerTools(server, ctx);
 
   const transport = new StdioServerTransport();
   await server.connect(transport);
-
-  const accountNames = Object.keys(config.accounts).join(", ");
-  process.stderr.write(
-    `[email-mcp] v${VERSION} started. Accounts: ${accountNames} (default: ${config.defaultAccount})\n`,
+  logger.info(
+    {
+      version: pkg.version,
+      surface: "stdio",
+      accounts: Object.keys(ctx.config.accounts),
+      defaultAccount: ctx.config.defaultAccount,
+    },
+    "started",
   );
 
-  const shutdown = async (signal: string) => {
-    process.stderr.write(`[email-mcp] Shutting down (${signal})...\n`);
+  const shutdown = async (signal: string): Promise<void> => {
+    logger.info({ signal }, "shutting down");
     await server.close();
     process.exit(0);
   };
-
-  process.on("SIGTERM", () => shutdown("SIGTERM"));
-  process.on("SIGINT", () => shutdown("SIGINT"));
+  process.on("SIGTERM", () => {
+    void shutdown("SIGTERM");
+  });
+  process.on("SIGINT", () => {
+    void shutdown("SIGINT");
+  });
 }
 
-main().catch((error) => {
-  process.stderr.write(
-    `[email-mcp] Fatal: ${error instanceof Error ? error.message : String(error)}\n`,
-  );
+main().catch((err: unknown) => {
+  logger.fatal({ err }, "fatal startup error");
   process.exit(1);
 });

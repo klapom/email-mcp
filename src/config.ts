@@ -1,6 +1,6 @@
-import { readFileSync } from "fs";
-import { homedir } from "os";
-import { join } from "path";
+import { readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { z } from "zod";
 
 const AccountSchema = z.object({
@@ -30,8 +30,7 @@ export type Config = z.infer<typeof ConfigSchema>;
 
 export function loadConfig(): Config {
   const configPath =
-    process.env.EMAIL_ACCOUNTS_FILE ??
-    join(homedir(), ".email-mcp", "accounts.json");
+    process.env.EMAIL_ACCOUNTS_FILE ?? join(homedir(), ".email-mcp", "accounts.json");
 
   let raw: unknown;
   try {
@@ -39,16 +38,13 @@ export function loadConfig(): Config {
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     throw new Error(
-      `Cannot read accounts config at ${configPath}: ${msg}\n` +
-        `Create it or set EMAIL_ACCOUNTS_FILE env var.`,
+      `Cannot read accounts config at ${configPath}: ${msg}\nCreate it or set EMAIL_ACCOUNTS_FILE env var.`,
     );
   }
 
   const result = ConfigSchema.safeParse(raw);
   if (!result.success) {
-    const errors = result.error.errors
-      .map((e) => `  ${e.path.join(".")}: ${e.message}`)
-      .join("\n");
+    const errors = result.error.errors.map((e) => `  ${e.path.join(".")}: ${e.message}`).join("\n");
     throw new Error(`Invalid accounts config:\n${errors}`);
   }
 
@@ -67,19 +63,23 @@ export function loadConfig(): Config {
 
 export function getAccount(config: Config, name?: string): AccountConfig {
   const key = name ?? config.defaultAccount ?? Object.keys(config.accounts)[0];
+  if (!key) {
+    throw new Error("No accounts configured.");
+  }
   const account = config.accounts[key];
   if (!account) {
     const available = Object.keys(config.accounts).join(", ");
-    throw new Error(
-      `Unknown account "${key}". Available accounts: ${available}`,
-    );
+    throw new Error(`Unknown account "${key}". Available accounts: ${available}`);
   }
   return account;
 }
 
-export function accountParam(config: Config) {
+export function accountParam(config: Config): { description: string; defaultName: string } {
   const names = Object.keys(config.accounts);
   const defaultName = config.defaultAccount ?? names[0];
+  if (!defaultName) {
+    throw new Error("No accounts configured — cannot derive default account.");
+  }
   return {
     description: `Account name to use. Available: ${names.join(", ")}. Default: ${defaultName}`,
     defaultName,

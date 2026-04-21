@@ -1,5 +1,5 @@
 import nodemailer from "nodemailer";
-import type { AccountConfig } from "./config.js";
+import type { AccountConfig } from "../config.js";
 
 export interface SendOptions {
   to: string;
@@ -11,10 +11,7 @@ export interface SendOptions {
   references?: string;
 }
 
-export async function sendEmail(
-  account: AccountConfig,
-  options: SendOptions,
-): Promise<string> {
+export async function sendEmail(account: AccountConfig, options: SendOptions): Promise<string> {
   const transport = nodemailer.createTransport({
     host: account.smtp.host,
     port: account.smtp.port,
@@ -25,9 +22,7 @@ export async function sendEmail(
     },
   });
 
-  const from = account.fromName
-    ? `${account.fromName} <${account.user}>`
-    : account.user;
+  const from = account.fromName ? `${account.fromName} <${account.user}>` : account.user;
 
   const info = await transport.sendMail({ from, ...options });
   return info.messageId;
