@@ -3,18 +3,7 @@ import { z } from "zod";
 import { accountParam, getAccount } from "../config.js";
 import { withImap } from "../upstream/imap-client.js";
 import type { ToolsContext } from "./context.js";
-
-// biome-ignore lint/suspicious/noExplicitAny: imapflow bodyStructure is loosely typed
-function hasAttachment(structure: any): boolean {
-  if (!structure) return false;
-  if (
-    structure.disposition?.toLowerCase() === "attachment" ||
-    structure.type?.toLowerCase() === "attachment"
-  )
-    return true;
-  if (structure.childNodes) return structure.childNodes.some((c: unknown) => hasAttachment(c));
-  return false;
-}
+import { type AttachmentMeta, attachmentList, flattenParts } from "./mime.js";
 
 export function buildMailListTools(
   ctx: ToolsContext,
@@ -68,6 +57,7 @@ Array<ToolDef<any, ToolsContext>> {
           date: string;
           seen: boolean;
           hasAttachments: boolean;
+          attachments: AttachmentMeta[];
         }> = [];
 
         for await (const msg of client.fetch(
@@ -78,13 +68,18 @@ Array<ToolDef<any, ToolsContext>> {
           const from = msg.envelope?.from?.[0]
             ? `${msg.envelope.from[0].name ?? ""} <${msg.envelope.from[0].address}>`.trim()
             : "unknown";
+          // bodyStructure is O(KB) and already fetched, so attachment metadata
+          // (filename/size/type) costs no extra IMAP round-trip — callers can go
+          // straight to get_attachment without a read_email filename lookup.
+          const attachments = attachmentList(flattenParts(msg.bodyStructure));
           result.push({
             uid: msg.uid,
             from,
             subject: msg.envelope?.subject ?? "(no subject)",
             date: msg.envelope?.date?.toISOString() ?? "",
             seen: msg.flags?.has("\\Seen") ?? false,
-            hasAttachments: hasAttachment(msg.bodyStructure),
+            hasAttachments: attachments.length > 0,
+            attachments,
           });
         }
         return result;

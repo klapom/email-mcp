@@ -8,40 +8,35 @@ vi.mock("../upstream/imap-client.js", () => ({
 
 import { buildMailReadTools } from "./mail-read.js";
 
-function makeRawEmail(body: string, contentType = "text/plain") {
-  return `From: Alice <alice@test.com>\r\nTo: Bob <bob@test.com>\r\nSubject: Test\r\nContent-Type: ${contentType}\r\n\r\n${body}`;
-}
+const envelope = {
+  from: [{ name: "Alice", address: "alice@test.com" }],
+  to: [{ name: "Bob", address: "bob@test.com" }],
+  subject: "Test",
+  date: new Date("2026-01-01"),
+  messageId: "<msg1@test>",
+};
 
-function makeMultipartEmail(textBody: string, htmlBody: string) {
-  const boundary = "----boundary123";
-  return [
-    "From: Alice <alice@test.com>",
-    "To: Bob <bob@test.com>",
-    "Subject: Test",
-    `Content-Type: multipart/mixed; boundary="${boundary}"`,
-    "",
-    `--${boundary}`,
-    "Content-Type: text/plain",
-    "",
-    textBody,
-    `--${boundary}`,
-    "Content-Type: text/html",
-    "",
-    htmlBody,
-    `--${boundary}--`,
-  ].join("\r\n");
-}
-
-function makeMockClient(messages: unknown[]) {
-  return {
-    mailboxOpen: vi.fn(),
-    fetch: vi.fn().mockReturnValue(
-      (async function* () {
-        for (const m of messages) yield m;
-      })(),
-    ),
-    messageFlagsAdd: vi.fn(),
-  };
+/**
+ * Builds a mock ImapFlow client that answers two kinds of fetch:
+ *  - structure fetch (envelope + bodyStructure)  -> yields { uid, envelope, bodyStructure }
+ *  - bodyParts fetch ({ bodyParts: [...] })       -> yields { uid, bodyParts: Map }
+ * bodyParts content is RAW (transfer-encoded), exactly as imapflow returns it.
+ */
+function makeMockClient(_uid: number, bodyStructure: unknown, bodyParts: Record<string, Buffer>) {
+  const fetch = vi.fn((range: number[], query: { bodyParts?: string[]; source?: boolean }) =>
+    (async function* () {
+      if (query.bodyParts) {
+        const m = new Map<string, Buffer>();
+        for (const id of query.bodyParts) {
+          if (bodyParts[id]) m.set(id, bodyParts[id]);
+        }
+        yield { uid: range[0], bodyParts: m };
+      } else {
+        yield { uid: range[0], envelope, bodyStructure };
+      }
+    })(),
+  );
+  return { mailboxOpen: vi.fn(), fetch, messageFlagsAdd: vi.fn() };
 }
 
 describe("mail-read", () => {
@@ -55,30 +50,23 @@ describe("mail-read", () => {
     return tool!.handler(ctx, args);
   };
 
+  const wireClient = (client: unknown) =>
+    mockWithImap.mockImplementation(async (_a: unknown, fn: (c: unknown) => Promise<unknown>) =>
+      fn(client),
+    );
+
   it("exposes read_email tool", () => {
     const tools = buildMailReadTools(buildTestContext());
     expect(tools.map((t) => t.name)).toEqual(["read_email"]);
   });
 
   it("reads a plain text email", async () => {
-    const raw = makeRawEmail("Hello world");
-    const client = makeMockClient([
-      {
-        uid: 42,
-        source: Buffer.from(raw),
-        envelope: {
-          from: [{ name: "Alice", address: "alice@test.com" }],
-          to: [{ name: "Bob", address: "bob@test.com" }],
-          subject: "Test",
-          date: new Date("2026-01-01"),
-          messageId: "<msg1@test>",
-        },
-        bodyStructure: null,
-      },
-    ]);
-    mockWithImap.mockImplementation(async (_a: unknown, fn: (c: unknown) => Promise<unknown>) =>
-      fn(client),
+    const client = makeMockClient(
+      42,
+      { part: "1", type: "text/plain", encoding: "" },
+      { "1": Buffer.from("Hello world") },
     );
+    wireClient(client);
 
     const result = await callReadEmail({
       account: "main",
@@ -93,24 +81,18 @@ describe("mail-read", () => {
   });
 
   it("reads multipart email, prefers text", async () => {
-    const raw = makeMultipartEmail("plain text", "<b>html</b>");
-    const client = makeMockClient([
+    const client = makeMockClient(
+      43,
       {
-        uid: 43,
-        source: Buffer.from(raw),
-        envelope: {
-          from: [{ name: "Alice", address: "alice@test.com" }],
-          to: [{ name: "Bob", address: "bob@test.com" }],
-          subject: "Test",
-          date: new Date("2026-01-01"),
-          messageId: "<msg2@test>",
-        },
-        bodyStructure: null,
+        type: "multipart/alternative",
+        childNodes: [
+          { part: "1", type: "text/plain", encoding: "" },
+          { part: "2", type: "text/html", encoding: "" },
+        ],
       },
-    ]);
-    mockWithImap.mockImplementation(async (_a: unknown, fn: (c: unknown) => Promise<unknown>) =>
-      fn(client),
+      { "1": Buffer.from("plain text"), "2": Buffer.from("<b>html</b>") },
     );
+    wireClient(client);
 
     const result = await callReadEmail({
       account: "main",
@@ -130,9 +112,7 @@ describe("mail-read", () => {
       fetch: vi.fn().mockReturnValue((async function* () {})()),
       messageFlagsAdd: vi.fn(),
     };
-    mockWithImap.mockImplementation(async (_a: unknown, fn: (c: unknown) => Promise<unknown>) =>
-      fn(client),
-    );
+    wireClient(client);
 
     const result = await callReadEmail({
       account: "main",
@@ -146,24 +126,12 @@ describe("mail-read", () => {
 
   it("decodes base64 body", async () => {
     const encoded = Buffer.from("Decoded text").toString("base64");
-    const raw = `From: a@b.com\r\nContent-Type: text/plain\r\nContent-Transfer-Encoding: base64\r\n\r\n${encoded}`;
-    const client = makeMockClient([
-      {
-        uid: 44,
-        source: Buffer.from(raw),
-        envelope: {
-          from: [{ address: "a@b.com" }],
-          to: [],
-          subject: "B64",
-          date: new Date(),
-          messageId: "",
-        },
-        bodyStructure: null,
-      },
-    ]);
-    mockWithImap.mockImplementation(async (_a: unknown, fn: (c: unknown) => Promise<unknown>) =>
-      fn(client),
+    const client = makeMockClient(
+      44,
+      { part: "1", type: "text/plain", encoding: "base64" },
+      { "1": Buffer.from(encoded) },
     );
+    wireClient(client);
 
     const result = await callReadEmail({
       account: "main",
@@ -175,25 +143,31 @@ describe("mail-read", () => {
     expect(parsed.body).toBe("Decoded text");
   });
 
-  it("reads plain-html single-part email as bodyType html", async () => {
-    const raw = "From: a@b.com\r\nContent-Type: text/html\r\n\r\n<p>Hello</p>";
-    const client = makeMockClient([
-      {
-        uid: 46,
-        source: Buffer.from(raw),
-        envelope: {
-          from: [{ address: "a@b.com" }],
-          to: [],
-          subject: "H",
-          date: new Date(),
-          messageId: "",
-        },
-        bodyStructure: null,
-      },
-    ]);
-    mockWithImap.mockImplementation(async (_a: unknown, fn: (c: unknown) => Promise<unknown>) =>
-      fn(client),
+  it("decodes quoted-printable body", async () => {
+    const client = makeMockClient(
+      45,
+      { part: "1", type: "text/plain", encoding: "quoted-printable" },
+      { "1": Buffer.from("Hello=20World") },
     );
+    wireClient(client);
+
+    const result = await callReadEmail({
+      account: "main",
+      uid: 45,
+      folder: "INBOX",
+      mark_as_read: false,
+    });
+    const parsed = JSON.parse(result.content[0]!.text);
+    expect(parsed.body).toBe("Hello World");
+  });
+
+  it("reads single-part html email as bodyType html", async () => {
+    const client = makeMockClient(
+      46,
+      { part: "1", type: "text/html", encoding: "" },
+      { "1": Buffer.from("<p>Hello</p>") },
+    );
+    wireClient(client);
     const result = await callReadEmail({
       account: "main",
       uid: 46,
@@ -206,41 +180,26 @@ describe("mail-read", () => {
   });
 
   it("extracts attachments from multipart email", async () => {
-    const boundary = "----b";
-    const raw = [
-      "From: a@b.com",
-      "To: c@d.com",
-      "Subject: A",
-      `Content-Type: multipart/mixed; boundary="${boundary}"`,
-      "",
-      `--${boundary}`,
-      "Content-Type: text/plain",
-      "",
-      "hi",
-      `--${boundary}`,
-      'Content-Type: application/pdf; name="invoice.pdf"',
-      'Content-Disposition: attachment; filename="invoice.pdf"',
-      "",
-      "binary-blob",
-      `--${boundary}--`,
-    ].join("\r\n");
-    const client = makeMockClient([
+    const client = makeMockClient(
+      47,
       {
-        uid: 47,
-        source: Buffer.from(raw),
-        envelope: {
-          from: [{ address: "a@b.com" }],
-          to: [{ address: "c@d.com" }],
-          subject: "A",
-          date: new Date(),
-          messageId: "<a@b>",
-        },
-        bodyStructure: null,
+        type: "multipart/mixed",
+        childNodes: [
+          { part: "1", type: "text/plain", encoding: "" },
+          {
+            part: "2",
+            type: "application/pdf",
+            encoding: "base64",
+            disposition: "attachment",
+            dispositionParameters: { filename: "invoice.pdf" },
+            parameters: { name: "invoice.pdf" },
+            size: 1234,
+          },
+        ],
       },
-    ]);
-    mockWithImap.mockImplementation(async (_a: unknown, fn: (c: unknown) => Promise<unknown>) =>
-      fn(client),
+      { "1": Buffer.from("hi") },
     );
+    wireClient(client);
     const result = await callReadEmail({
       account: "main",
       uid: 47,
@@ -250,36 +209,73 @@ describe("mail-read", () => {
     const parsed = JSON.parse(result.content[0]!.text);
     expect(parsed.attachments).toHaveLength(1);
     expect(parsed.attachments[0].filename).toBe("invoice.pdf");
+    expect(parsed.attachments[0].size).toBe(1234);
   });
 
-  it("decodes quoted-printable body", async () => {
-    const raw =
-      "From: a@b.com\r\nContent-Type: text/plain\r\nContent-Transfer-Encoding: quoted-printable\r\n\r\nHello=20World";
-    const client = makeMockClient([
-      {
-        uid: 45,
-        source: Buffer.from(raw),
-        envelope: {
-          from: [{ address: "a@b.com" }],
-          to: [],
-          subject: "QP",
-          date: new Date(),
-          messageId: "",
+  // #4: nested Outlook multipart with an inline image, plus #2: read_email must
+  // not pull attachment bytes (only the text body parts get fetched).
+  it("handles nested Outlook multipart with inline image, without fetching attachment bytes", async () => {
+    const bodyStructure = {
+      type: "multipart/mixed",
+      childNodes: [
+        {
+          type: "multipart/related",
+          childNodes: [
+            {
+              type: "multipart/alternative",
+              childNodes: [
+                { part: "1.1.1", type: "text/plain", encoding: "" },
+                { part: "1.1.2", type: "text/html", encoding: "" },
+              ],
+            },
+            {
+              part: "1.2",
+              type: "image/jpeg",
+              encoding: "base64",
+              disposition: "inline",
+              dispositionParameters: { filename: "visualisierung_1.jpg" },
+              parameters: { name: "visualisierung_1.jpg" },
+              size: 50000,
+            },
+          ],
         },
-        bodyStructure: null,
-      },
-    ]);
-    mockWithImap.mockImplementation(async (_a: unknown, fn: (c: unknown) => Promise<unknown>) =>
-      fn(client),
-    );
+        {
+          part: "2",
+          type: "application/pdf",
+          encoding: "base64",
+          disposition: "attachment",
+          dispositionParameters: { filename: "angebot.pdf" },
+          size: 900000,
+        },
+      ],
+    };
+    const client = makeMockClient(98203, bodyStructure, {
+      "1.1.1": Buffer.from("Angebot anbei"),
+      "1.1.2": Buffer.from("<p>Angebot anbei</p>"),
+    });
+    wireClient(client);
 
     const result = await callReadEmail({
       account: "main",
-      uid: 45,
+      uid: 98203,
       folder: "INBOX",
       mark_as_read: false,
     });
     const parsed = JSON.parse(result.content[0]!.text);
-    expect(parsed.body).toBe("Hello World");
+
+    // body found in the deeply nested text/plain part
+    expect(parsed.body).toBe("Angebot anbei");
+    expect(parsed.bodyType).toBe("text");
+
+    // both the inline JPEG and the PDF attachment are surfaced
+    const names = parsed.attachments.map((a: { filename: string }) => a.filename).sort();
+    expect(names).toEqual(["angebot.pdf", "visualisierung_1.jpg"]);
+
+    // #2: no fetch ever requested `source`, and the bodyParts fetch only asked
+    // for the two text parts — never the 50 KB JPEG or 900 KB PDF.
+    const calls = client.fetch.mock.calls;
+    expect(calls.some(([, q]) => q.source)).toBe(false);
+    const partFetch = calls.find(([, q]) => q.bodyParts);
+    expect(partFetch?.[1].bodyParts).toEqual(["1.1.1", "1.1.2"]);
   });
 });

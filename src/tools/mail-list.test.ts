@@ -131,6 +131,81 @@ describe("mail-list", () => {
     expect(parsed[0].hasAttachments).toBe(true);
   });
 
+  it("includes attachment metadata (filename/size/type) when present", async () => {
+    const client = makeMockClient(
+      [4],
+      [
+        {
+          uid: 4,
+          envelope: { from: [{ address: "a@b.com" }], subject: "A", date: new Date() },
+          flags: new Set(),
+          bodyStructure: {
+            type: "multipart/mixed",
+            childNodes: [
+              { part: "1", type: "text/plain", encoding: "" },
+              {
+                part: "2",
+                type: "application/pdf",
+                disposition: "attachment",
+                dispositionParameters: { filename: "angebot.pdf" },
+                size: 90000,
+              },
+              // inline image — surfaced as attachment via the filename heuristic
+              {
+                part: "3",
+                type: "image/jpeg",
+                disposition: "inline",
+                dispositionParameters: { filename: "vis.jpg" },
+                size: 5000,
+              },
+            ],
+          },
+        },
+      ],
+    );
+    mockWithImap.mockImplementation(async (_a: unknown, fn: (c: unknown) => Promise<unknown>) =>
+      fn(client),
+    );
+    const result = await callListEmails({
+      account: "main",
+      folder: "INBOX",
+      limit: 20,
+      unread_only: false,
+    });
+    const parsed = JSON.parse(result.content[0]!.text);
+    expect(parsed[0].hasAttachments).toBe(true);
+    expect(parsed[0].attachments).toEqual([
+      { filename: "angebot.pdf", size: 90000, type: "application/pdf" },
+      { filename: "vis.jpg", size: 5000, type: "image/jpeg" },
+    ]);
+  });
+
+  it("returns empty attachments array when none present", async () => {
+    const client = makeMockClient(
+      [5],
+      [
+        {
+          uid: 5,
+          envelope: { from: [{ address: "a@b.com" }], subject: "B", date: new Date() },
+          flags: new Set(),
+          bodyStructure: { part: "1", type: "text/plain" },
+        },
+      ],
+    );
+    mockWithImap.mockImplementation(async (_a: unknown, fn: (c: unknown) => Promise<unknown>) =>
+      fn(client),
+    );
+    const result = await callListEmails({
+      account: "main",
+      folder: "INBOX",
+      limit: 20,
+      unread_only: false,
+    });
+    const parsed = JSON.parse(result.content[0]!.text);
+    expect(parsed[0].hasAttachments).toBe(false);
+    expect(parsed[0].attachments).toEqual([]);
+  });
+
   it("returns empty when search has no results", async () => {
     const client = {
       mailboxOpen: vi.fn().mockResolvedValue({ exists: 5 }),
