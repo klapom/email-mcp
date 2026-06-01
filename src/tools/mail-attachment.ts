@@ -9,52 +9,13 @@ import { z } from "zod";
 import { accountParam, getAccount } from "../config.js";
 import { withImap } from "../upstream/imap-client.js";
 import type { ToolsContext } from "./context.js";
+import { decodeBytes, flattenParts } from "./mime.js";
 
 const VLM_URL = process.env.VLM_URL ?? "http://localhost:8089";
 const VLM_MODEL = process.env.VLM_MODEL ?? "qwen3-vl-8b";
 const VLM_TIMEOUT_MS = 90_000;
 
 const execFileAsync = promisify(execFile);
-
-function getHeader(headers: string, name: string): string | undefined {
-  const re = new RegExp(`^${name}:\\s*(.+?)(?=\\r?\\n[^\\s]|$)`, "im");
-  const m = re.exec(headers);
-  return m ? (m[1] ?? "").replace(/\r?\n\s+/g, " ").trim() : undefined;
-}
-
-function getBoundary(contentType: string): string | undefined {
-  return getParam(contentType, "boundary");
-}
-
-function getParam(header: string, param: string): string | undefined {
-  const re = new RegExp(`${param}="?([^";\\r\\n]+)"?`, "i");
-  const m = re.exec(header);
-  return m ? (m[1] ?? "").trim() : undefined;
-}
-
-function splitMultipart(body: string, boundary: string): string[] {
-  const delimiter = `--${boundary}`;
-  const parts = body.split(new RegExp(`\\r?\\n?${escapeRegex(delimiter)}[\\r\\n]*`));
-  return parts.slice(1).filter((p) => !p.startsWith("--"));
-}
-
-function escapeRegex(s: string): string {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-function decodeBytes(body: string, encoding: string): Buffer {
-  const enc = encoding.toLowerCase().trim();
-  if (enc === "base64") {
-    return Buffer.from(body.replace(/\s+/g, ""), "base64");
-  }
-  if (enc === "quoted-printable") {
-    const decoded = body
-      .replace(/=\r?\n/g, "")
-      .replace(/=([0-9A-Fa-f]{2})/g, (_, hex) => String.fromCharCode(Number.parseInt(hex, 16)));
-    return Buffer.from(decoded, "binary");
-  }
-  return Buffer.from(body, "binary");
-}
 
 async function analyzeImageWithVLM(
   bytes: Buffer,
@@ -249,60 +210,56 @@ Array<ToolDef<any, ToolsContext>> {
       const result = await withImap(account, async (client) => {
         await client.mailboxOpen(folder, { readOnly: true });
 
-        for await (const msg of client.fetch([uid], { source: true }, { uid: true })) {
-          const raw = msg.source?.toString("binary") ?? "";
-          const headerEnd = raw.indexOf("\r\n\r\n");
-          const headers = headerEnd > -1 ? raw.slice(0, headerEnd) : "";
-          const bodyRaw = headerEnd > -1 ? raw.slice(headerEnd + 4) : raw;
+        // Locate the attachment via the parsed BODYSTRUCTURE tree (recursive,
+        // inline-aware), then download only that one part — never the whole
+        // RFC822 source. Works for nested Outlook multiparts and inline images
+        // that the old top-level source split missed.
+        let parts: ReturnType<typeof flattenParts> = [];
+        let found = false;
+        for await (const msg of client.fetch([uid], { bodyStructure: true }, { uid: true })) {
+          found = true;
+          parts = flattenParts(msg.bodyStructure);
+        }
+        if (!found) {
+          return { error: `Email UID ${uid} not found.` };
+        }
 
-          const contentType = getHeader(headers, "Content-Type") ?? "";
-          const boundary = getBoundary(contentType);
-
-          if (!boundary) {
-            return { error: "Email has no multipart content — no attachments found." };
-          }
-
-          const parts = splitMultipart(bodyRaw, boundary);
-          for (const part of parts) {
-            const partHeaderEnd = part.indexOf("\r\n\r\n");
-            const partHeaders = partHeaderEnd > -1 ? part.slice(0, partHeaderEnd) : "";
-            const partBody = partHeaderEnd > -1 ? part.slice(partHeaderEnd + 4) : part;
-            const partType = getHeader(partHeaders, "Content-Type") ?? "";
-            const disposition = getHeader(partHeaders, "Content-Disposition") ?? "";
-            const encoding = getHeader(partHeaders, "Content-Transfer-Encoding") ?? "";
-
-            const partFilename =
-              getParam(disposition, "filename") ?? getParam(partType, "name") ?? "";
-
-            if (
-              disposition.toLowerCase().includes("attachment") &&
-              partFilename.toLowerCase() === filename.toLowerCase()
-            ) {
-              const mimeType = partType.split(";")[0]?.trim().toLowerCase() ?? "";
-              const bytes = decodeBytes(partBody, encoding);
-
-              if (!extract_text) {
-                return {
-                  filename: partFilename,
-                  mimeType,
-                  size: bytes.length,
-                  content: bytes.toString("base64"),
-                  encoding: "base64",
-                };
-              }
-
-              const text = await extractText(bytes, partFilename, mimeType, prompt);
-              return {
-                filename: partFilename,
-                mimeType,
-                size: bytes.length,
-                text,
-              };
-            }
-          }
+        const target = parts.find(
+          (p) => p.isAttachment && (p.filename ?? "").toLowerCase() === filename.toLowerCase(),
+        );
+        if (!target) {
           return { error: `Attachment "${filename}" not found in email UID ${uid}.` };
         }
-        return { error: `Email UID ${uid} not found.` };
+
+        let bytes: Buffer | null = null;
+        for await (const msg of client.fetch([uid], { bodyParts: [target.part] }, { uid: true })) {
+          const raw = msg.bodyParts?.get(target.part);
+          if (raw) bytes = decodeBytes(raw.toString("binary"), target.encoding);
+        }
+        if (!bytes) {
+          return { error: `Attachment "${filename}" could not be downloaded from UID ${uid}.` };
+        }
+
+        const partFilename = target.filename ?? filename;
+        const mimeType = target.mimeType;
+
+        if (!extract_text) {
+          return {
+            filename: partFilename,
+            mimeType,
+            size: bytes.length,
+            content: bytes.toString("base64"),
+            encoding: "base64",
+          };
+        }
+
+        const text = await extractText(bytes, partFilename, mimeType, prompt);
+        return {
+          filename: partFilename,
+          mimeType,
+          size: bytes.length,
+          text,
+        };
       });
 
       if ("error" in result) {
