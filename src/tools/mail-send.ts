@@ -179,18 +179,21 @@ Array<ToolDef<any, ToolsContext>> {
 
       const raw = await new Promise<Buffer>((resolve, reject) => {
         const mail = nodemailer.createTransport({ streamTransport: true });
-        mail.sendMail({ from, to, subject, text: body, cc, date: new Date(), attachments: mailAttachments }, (err, info) => {
-          if (err) return reject(err);
-          const stream = info.message;
-          if (!stream || typeof (stream as NodeJS.ReadableStream).on !== "function") {
-            return reject(new Error("nodemailer did not return a readable stream"));
-          }
-          const readable = stream as NodeJS.ReadableStream;
-          const chunks: Buffer[] = [];
-          readable.on("data", (chunk: Buffer) => chunks.push(chunk));
-          readable.on("end", () => resolve(Buffer.concat(chunks)));
-          readable.on("error", reject);
-        });
+        mail.sendMail(
+          { from, to, subject, text: body, cc, date: new Date(), attachments: mailAttachments },
+          (err, info) => {
+            if (err) return reject(err);
+            const stream = info.message;
+            if (!stream || typeof (stream as NodeJS.ReadableStream).on !== "function") {
+              return reject(new Error("nodemailer did not return a readable stream"));
+            }
+            const readable = stream as NodeJS.ReadableStream;
+            const chunks: Buffer[] = [];
+            readable.on("data", (chunk: Buffer) => chunks.push(chunk));
+            readable.on("end", () => resolve(Buffer.concat(chunks)));
+            readable.on("error", reject);
+          },
+        );
       });
 
       const result = await withImap(account, async (client) => {

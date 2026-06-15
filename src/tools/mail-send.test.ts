@@ -18,8 +18,7 @@ vi.mock("nodemailer", () => ({
 
 const mockAppend = vi.fn();
 vi.mock("../upstream/imap-client.js", () => ({
-  withImap: (_account: unknown, fn: (client: unknown) => unknown) =>
-    fn({ append: mockAppend }),
+  withImap: (_account: unknown, fn: (client: unknown) => unknown) => fn({ append: mockAppend }),
 }));
 
 import { buildMailSendTools } from "./mail-send.js";
@@ -169,11 +168,7 @@ describe("mail-send", () => {
         subject: "Entwurf",
         body: "text",
       });
-      expect(mockAppend).toHaveBeenCalledWith(
-        "Drafts",
-        expect.any(Buffer),
-        ["\\Draft", "\\Seen"],
-      );
+      expect(mockAppend).toHaveBeenCalledWith("Drafts", expect.any(Buffer), ["\\Draft", "\\Seen"]);
       expect(result.content[0]!.text).toContain('Draft saved to "Drafts"');
       expect(result.content[0]!.text).toContain("UID 42");
     });
@@ -187,11 +182,10 @@ describe("mail-send", () => {
         body: "y",
         draft_folder: "Entwürfe",
       });
-      expect(mockAppend).toHaveBeenCalledWith(
-        "Entwürfe",
-        expect.any(Buffer),
-        ["\\Draft", "\\Seen"],
-      );
+      expect(mockAppend).toHaveBeenCalledWith("Entwürfe", expect.any(Buffer), [
+        "\\Draft",
+        "\\Seen",
+      ]);
     });
 
     it("passes normalised attachments into the drafted message", async () => {
@@ -240,8 +234,8 @@ describe("mail-send", () => {
     });
 
     it("propagates a nodemailer sendMail error", async () => {
-      mockSendMail.mockImplementation(
-        (_opts: unknown, cb: (err: Error | null) => void) => cb(new Error("smtp boom")),
+      mockSendMail.mockImplementation((_opts: unknown, cb: (err: Error | null) => void) =>
+        cb(new Error("smtp boom")),
       );
       const { ctx, t } = tool("save_draft");
       await expect(
