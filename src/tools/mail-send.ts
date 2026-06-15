@@ -3,8 +3,40 @@ import nodemailer from "nodemailer";
 import { z } from "zod";
 import { accountParam, getAccount } from "../config.js";
 import { withImap } from "../upstream/imap-client.js";
-import { sendEmail } from "../upstream/smtp-client.js";
+import { type MailAttachment, sendEmail } from "../upstream/smtp-client.js";
 import type { ToolsContext } from "./context.js";
+
+// Accepted attachment input: an absolute file path string, or an object with
+// either a {filename, path} or {filename, content_base64} pair.
+const attachmentInput = z.union([
+  z.string(),
+  z.object({
+    filename: z.string().optional(),
+    path: z.string().optional(),
+    content_base64: z.string().optional(),
+  }),
+]);
+type AttachmentInput = z.infer<typeof attachmentInput>;
+
+const attachmentsParam = z
+  .array(attachmentInput)
+  .optional()
+  .describe(
+    "Files to attach. Each entry is an absolute file path string, or " +
+      "{filename, path}, or {filename, content_base64} for inline bytes.",
+  );
+
+/** Normalise the tool's attachment input into nodemailer attachment objects. */
+function toMailAttachments(items?: AttachmentInput[]): MailAttachment[] | undefined {
+  if (!items || items.length === 0) return undefined;
+  return items.map((it) => {
+    if (typeof it === "string") return { path: it };
+    if (it.content_base64) {
+      return { filename: it.filename, content: Buffer.from(it.content_base64, "base64") };
+    }
+    return { filename: it.filename, path: it.path };
+  });
+}
 
 export function buildMailSendTools(
   ctx: ToolsContext,
@@ -22,6 +54,7 @@ Array<ToolDef<any, ToolsContext>> {
       body: z.string().describe("Email body (plain text)"),
       cc: z.string().optional().describe("CC recipients (optional)"),
       bcc: z.string().optional().describe("BCC recipients (optional)"),
+      attachments: attachmentsParam,
     },
     handler: async (ctx, args) => {
       const {
@@ -31,6 +64,7 @@ Array<ToolDef<any, ToolsContext>> {
         body,
         cc,
         bcc,
+        attachments,
       } = args as {
         account: string;
         to: string;
@@ -38,9 +72,17 @@ Array<ToolDef<any, ToolsContext>> {
         body: string;
         cc?: string;
         bcc?: string;
+        attachments?: AttachmentInput[];
       };
       const account = getAccount(ctx.config, accountName);
-      const messageId = await sendEmail(account, { to, subject, text: body, cc, bcc });
+      const messageId = await sendEmail(account, {
+        to,
+        subject,
+        text: body,
+        cc,
+        bcc,
+        attachments: toMailAttachments(attachments),
+      });
       return {
         content: [{ type: "text", text: `Email sent. Message-ID: ${messageId}` }],
       };
@@ -57,6 +99,7 @@ Array<ToolDef<any, ToolsContext>> {
       body: z.string().describe("Reply body text"),
       in_reply_to: z.string().describe("Message-ID of the email being replied to"),
       cc: z.string().optional().describe("CC recipients (optional)"),
+      attachments: attachmentsParam,
     },
     handler: async (ctx, args) => {
       const {
@@ -66,6 +109,7 @@ Array<ToolDef<any, ToolsContext>> {
         body,
         in_reply_to,
         cc,
+        attachments,
       } = args as {
         account: string;
         to: string;
@@ -73,6 +117,7 @@ Array<ToolDef<any, ToolsContext>> {
         body: string;
         in_reply_to: string;
         cc?: string;
+        attachments?: AttachmentInput[];
       };
       const account = getAccount(ctx.config, accountName);
       const messageId = await sendEmail(account, {
@@ -82,6 +127,7 @@ Array<ToolDef<any, ToolsContext>> {
         cc,
         inReplyTo: in_reply_to,
         references: in_reply_to,
+        attachments: toMailAttachments(attachments),
       });
       return {
         content: [{ type: "text", text: `Reply sent. Message-ID: ${messageId}` }],
@@ -99,6 +145,7 @@ Array<ToolDef<any, ToolsContext>> {
       subject: z.string().describe("Email subject"),
       body: z.string().describe("Email body (plain text)"),
       cc: z.string().optional().describe("CC recipients (optional)"),
+      attachments: attachmentsParam,
       draft_folder: z
         .string()
         .optional()
@@ -113,6 +160,7 @@ Array<ToolDef<any, ToolsContext>> {
         subject,
         body,
         cc,
+        attachments,
         draft_folder,
       } = args as {
         account: string;
@@ -120,27 +168,32 @@ Array<ToolDef<any, ToolsContext>> {
         subject: string;
         body: string;
         cc?: string;
+        attachments?: AttachmentInput[];
         draft_folder?: string;
       };
       const account = getAccount(ctx.config, accountName);
       const folder = draft_folder ?? "Drafts";
 
       const from = account.fromName ? `${account.fromName} <${account.user}>` : account.user;
+      const mailAttachments = toMailAttachments(attachments);
 
       const raw = await new Promise<Buffer>((resolve, reject) => {
         const mail = nodemailer.createTransport({ streamTransport: true });
-        mail.sendMail({ from, to, subject, text: body, cc, date: new Date() }, (err, info) => {
-          if (err) return reject(err);
-          const stream = info.message;
-          if (!stream || typeof (stream as NodeJS.ReadableStream).on !== "function") {
-            return reject(new Error("nodemailer did not return a readable stream"));
-          }
-          const readable = stream as NodeJS.ReadableStream;
-          const chunks: Buffer[] = [];
-          readable.on("data", (chunk: Buffer) => chunks.push(chunk));
-          readable.on("end", () => resolve(Buffer.concat(chunks)));
-          readable.on("error", reject);
-        });
+        mail.sendMail(
+          { from, to, subject, text: body, cc, date: new Date(), attachments: mailAttachments },
+          (err, info) => {
+            if (err) return reject(err);
+            const stream = info.message;
+            if (!stream || typeof (stream as NodeJS.ReadableStream).on !== "function") {
+              return reject(new Error("nodemailer did not return a readable stream"));
+            }
+            const readable = stream as NodeJS.ReadableStream;
+            const chunks: Buffer[] = [];
+            readable.on("data", (chunk: Buffer) => chunks.push(chunk));
+            readable.on("end", () => resolve(Buffer.concat(chunks)));
+            readable.on("error", reject);
+          },
+        );
       });
 
       const result = await withImap(account, async (client) => {
