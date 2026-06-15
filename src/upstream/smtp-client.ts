@@ -1,6 +1,13 @@
 import nodemailer from "nodemailer";
 import type { AccountConfig } from "../config.js";
 
+export interface MailAttachment {
+  filename?: string;
+  path?: string;
+  content?: Buffer;
+  contentType?: string;
+}
+
 export interface SendOptions {
   to: string;
   subject: string;
@@ -9,6 +16,7 @@ export interface SendOptions {
   bcc?: string;
   inReplyTo?: string;
   references?: string;
+  attachments?: MailAttachment[];
 }
 
 export async function sendEmail(account: AccountConfig, options: SendOptions): Promise<string> {
